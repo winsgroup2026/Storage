@@ -1,0 +1,25 @@
+name: Scheduled Supabase Anti-Pause Ping
+
+on:
+  schedule:
+    # Berjalan setiap 3 hari pukul 02.00 WIB (19.00 UTC) untuk menjaga Supabase Free Tier tetap aktif
+    - cron: '0 19 */3 * *'
+  workflow_dispatch: # Memungkinkan trigger manual dari tab Actions
+
+jobs:
+  ping-database:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Supabase REST Health / Table
+        run: |
+          if [ -z "${{ secrets.SUPABASE_URL }}" ]; then
+            echo "Secrets SUPABASE_URL belum diatur, lewati ping."
+            exit 0
+          fi
+          echo "Mengirim ping ke Supabase REST Endpoint..."
+          curl -s -f -X GET "${{ secrets.SUPABASE_URL }}/rest/v1/ukuran?select=count" \
+            -H "apikey: ${{ secrets.SUPABASE_ANON_KEY }}" \
+            -H "Authorization: Bearer ${{ secrets.SUPABASE_ANON_KEY }}" \
+            -H "Range: 0-0" > /dev/null
+          echo "Supabase aktif dan merespon dengan baik!"
+
