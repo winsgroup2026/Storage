@@ -1,0 +1,51 @@
+name: Backup Mingguan Database Gudang
+
+on:
+  schedule:
+    # Berjalan setiap Minggu malam pukul 23:00 WIB (16:00 UTC)
+    - cron: '0 16 * * 0'
+  workflow_dispatch: # Trigger manual kapan saja dari GitHub
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Ekspor Data Supabase ke JSON & CSV Backup
+        run: |
+          if [ -z "${{ secrets.SUPABASE_URL }}" ]; then
+            echo "Secrets SUPABASE_URL belum diisi. Lewati backup."
+            exit 0
+          fi
+          mkdir -p backups/$(date +'%Y-%m')
+          TIMESTAMP=$(date +'%Y%m%d_%H%M%S')
+          BACKUP_DIR="backups/$(date +'%Y-%m')"
+
+          echo "Mengunduh snapshot data gudang..."
+          TABLES=("ukuran" "pabrik" "pihak" "purchase_order" "po_item" "penerimaan" "barang" "pengeluaran" "pengeluaran_item" "audit_log")
+          
+          for table in "${TABLES[@]}"; do
+            curl -s -X GET "${{ secrets.SUPABASE_URL }}/rest/v1/${table}?select=*" \
+              -H "apikey: ${{ secrets.SUPABASE_ANON_KEY }}" \
+              -H "Authorization: Bearer ${{ secrets.SUPABASE_ANON_KEY }}" \
+              -o "${BACKUP_DIR}/${table}_${TIMESTAMP}.json"
+          done
+
+          echo "Backup selesai disimpan di folder ${BACKUP_DIR}"
+
+      - name: Commit dan Simpan ke Repository Privat
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action Backup"
+          git add backups/
+          git diff --quiet && git diff --staged --quiet || (git commit -m "chore(backup): otomatis mingguan $(date +'%Y-%m-%d')" && git push)
+
