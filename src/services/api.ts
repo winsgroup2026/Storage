@@ -469,14 +469,16 @@ export const api = {
       tebal_cm?: number;
       qty: number;
     }[],
-    pabrikNama: string = 'UMKM Comet'
+    pabrikNama: string = 'UMKM Comet',
+    tanggalPo?: string
   ): Promise<{
     penerimaan_id: string;
     total_pcs: number;
     barcodes: { barcode: string; kode_ukuran: string; qty: number; nama_ukuran?: string }[];
   }> {
-    // Format DDMMYY untuk tanggal terima (mis. 2026-10-10 -> 101026)
-    const [year, month, day] = tanggalTerima.split('-');
+    // Format DDMMYY untuk tanggal PO pembentuk barcode (mis. 2026-10-10 -> 101026)
+    const tglForBarcode = tanggalPo || tanggalTerima;
+    const [year, month, day] = tglForBarcode.split('-');
     const dateCode = `${day}${month}${year.slice(-2)}`;
 
     if (isSupabaseConfigured && supabase && poId) {
@@ -575,6 +577,7 @@ export const api = {
     penerimaanList.unshift({
       id: penerimaanId,
       po_id: po?.id,
+      tanggal_po: tanggalPo || tanggalTerima,
       tanggal_terima: tanggalTerima,
       penerima,
       pabrik_nama: pabrikNama || po?.pabrik?.nama || 'UMKM Comet',
