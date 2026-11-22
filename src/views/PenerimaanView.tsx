@@ -36,6 +36,7 @@ export const PenerimaanView: React.FC<PenerimaanViewProps> = ({ initialPoId }) =
   const [pabrikNama, setPabrikNama] = useState('UMKM Comet');
   const [penerima, setPenerima] = useState('Staf Gudang');
   const [catatan, setCatatan] = useState('');
+  const [tanggalPo, setTanggalPo] = useState(() => new Date().toISOString().slice(0, 10));
   const [tanggalTerima, setTanggalTerima] = useState(() => new Date().toISOString().slice(0, 10));
 
   // Rows of incoming mattress sizes
@@ -74,7 +75,7 @@ export const PenerimaanView: React.FC<PenerimaanViewProps> = ({ initialPoId }) =
     loadData();
   }, []);
 
-  // Format tanggal DDMMYY untuk preview barcode (misal 10/11/2026 -> 101126)
+  // Format tanggal DDMMYY untuk preview barcode dari Tanggal PO (misal 10/11/2026 -> 101126)
   const getDateCode = (dateStr: string) => {
     if (!dateStr) return '';
     const parts = dateStr.split('-');
@@ -84,7 +85,7 @@ export const PenerimaanView: React.FC<PenerimaanViewProps> = ({ initialPoId }) =
     return '';
   };
 
-  const currentDateCode = getDateCode(tanggalTerima);
+  const currentDateCode = getDateCode(tanggalPo || tanggalTerima);
 
   // Tambah baris baru
   const handleAddRow = (kodeUkuran = '120', isCustom = false) => {
@@ -246,7 +247,8 @@ export const PenerimaanView: React.FC<PenerimaanViewProps> = ({ initialPoId }) =
         catatan.trim(),
         tanggalTerima,
         itemsToProcess,
-        pabrikNama.trim() || 'UMKM Comet'
+        pabrikNama.trim() || 'UMKM Comet',
+        tanggalPo
       );
 
       // Siapkan label untuk cetak instan
@@ -254,7 +256,7 @@ export const PenerimaanView: React.FC<PenerimaanViewProps> = ({ initialPoId }) =
         barcode: b.barcode,
         nama_ukuran: b.nama_ukuran || `Kasur Ukuran ${b.kode_ukuran}`,
         dimensi_str: `Kasur Busa ${b.kode_ukuran}`,
-        tanggal_masuk: tanggalTerima,
+        tanggal_masuk: tanggalPo || tanggalTerima,
         qty: b.qty,
       }));
 
@@ -282,7 +284,7 @@ export const PenerimaanView: React.FC<PenerimaanViewProps> = ({ initialPoId }) =
       barcode: b.barcode,
       nama_ukuran: `Kasur Ukuran ${b.kode_ukuran}`,
       dimensi_str: `Kasur Busa ${b.kode_ukuran}`,
-      tanggal_masuk: rcv.tanggal_terima,
+      tanggal_masuk: rcv.tanggal_po || rcv.tanggal_terima,
       qty: b.qty,
     }));
 
@@ -294,9 +296,9 @@ export const PenerimaanView: React.FC<PenerimaanViewProps> = ({ initialPoId }) =
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Penerimaan Barang Datang</h1>
+          <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Purchase Order (PO) Kasur</h1>
           <p className="text-xs text-slate-500 mt-1">
-            Catat kasur yang datang dari pabrik, pilih ukuran standar (80, 90, 100, 120, 140, 160, 200) atau ukuran custom, lalu cetak label barcode.
+            Catat pesanan purchase order (PO) kasur busa dari pabrik, terbitkan barcode penerimaan, dan kelola stok masuk secara terpadu.
           </p>
         </div>
 
@@ -308,7 +310,7 @@ export const PenerimaanView: React.FC<PenerimaanViewProps> = ({ initialPoId }) =
               activeTab === 'form' ? 'bg-white text-brand-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            Form Catat Barang Datang
+            Purchase Order (PO)
           </button>
           <button
             onClick={() => setActiveTab('history')}
@@ -316,7 +318,7 @@ export const PenerimaanView: React.FC<PenerimaanViewProps> = ({ initialPoId }) =
               activeTab === 'history' ? 'bg-white text-brand-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            Riwayat Penerimaan
+            Riwayat PO & Penerimaan
           </button>
         </div>
       </div>
@@ -326,10 +328,10 @@ export const PenerimaanView: React.FC<PenerimaanViewProps> = ({ initialPoId }) =
           <div className="flex items-center justify-between border-b border-slate-100 pb-4">
             <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
               <Boxes className="w-5 h-5 text-brand-600" />
-              <span>Form Catat Barang Datang</span>
+              <span>Purchase Order (PO)</span>
             </h2>
             <span className="text-xs font-bold text-brand-700 bg-brand-50 px-3 py-1 rounded-xl">
-              Format Barcode: {'{UKURAN}-{DDMMYY}'}
+              Format Barcode: {'{UKURAN}-{DDMMYY Tanggal PO}'}
             </span>
           </div>
 
@@ -342,7 +344,7 @@ export const PenerimaanView: React.FC<PenerimaanViewProps> = ({ initialPoId }) =
 
           <form onSubmit={handleSubmitPenerimaan} className="space-y-6">
             {/* Informasi Pemasok & Penerimaan */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">
                   Pabrik / Pemasok *
@@ -362,6 +364,25 @@ export const PenerimaanView: React.FC<PenerimaanViewProps> = ({ initialPoId }) =
 
               <div>
                 <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">
+                  Tanggal PO Barang *
+                </label>
+                <div className="relative">
+                  <Calendar className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-brand-600" />
+                  <input
+                    type="date"
+                    value={tanggalPo}
+                    onChange={(e) => setTanggalPo(e.target.value)}
+                    required
+                    className="w-full pl-9 pr-3 py-2 text-sm rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white font-medium"
+                  />
+                </div>
+                <span className="text-[10px] text-slate-400 mt-0.5 block">
+                  Tanggal PO ini membentuk kode barcode, misal: <strong className="font-mono text-brand-600">{currentDateCode}</strong>
+                </span>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">
                   Tanggal Barang Diterima *
                 </label>
                 <div className="relative">
@@ -375,7 +396,7 @@ export const PenerimaanView: React.FC<PenerimaanViewProps> = ({ initialPoId }) =
                   />
                 </div>
                 <span className="text-[10px] text-slate-400 mt-0.5 block">
-                  Tanggal ini membentuk barcode, misal: <strong className="font-mono text-brand-600">{currentDateCode}</strong>
+                  Tanggal fisik kasur tiba di gudang
                 </span>
               </div>
 
@@ -606,7 +627,7 @@ export const PenerimaanView: React.FC<PenerimaanViewProps> = ({ initialPoId }) =
             <table className="w-full text-left text-sm">
               <thead className="bg-slate-50/75 border-b border-slate-200 text-xs font-bold text-slate-500 uppercase">
                 <tr>
-                  <th className="py-3 px-4">Tanggal Terima</th>
+                  <th className="py-3 px-4">Tanggal PO & Terima</th>
                   <th className="py-3 px-4">Pabrik Pemasok</th>
                   <th className="py-3 px-4">Petugas Penerima</th>
                   <th className="py-3 px-4 text-center">Total Pcs</th>
@@ -619,14 +640,21 @@ export const PenerimaanView: React.FC<PenerimaanViewProps> = ({ initialPoId }) =
                 {penerimaanList.length === 0 ? (
                   <tr>
                     <td colSpan={7} className="py-8 text-center text-slate-400 text-xs italic">
-                      Belum ada riwayat penerimaan barang datang.
+                      Belum ada riwayat purchase order (PO) / penerimaan kasur.
                     </td>
                   </tr>
                 ) : (
                   penerimaanList.map((rcv) => (
                     <tr key={rcv.id} className="hover:bg-slate-50">
                       <td className="py-3.5 px-4 font-medium text-slate-800 text-xs">
-                        {new Date(rcv.tanggal_terima).toLocaleDateString('id-ID')}
+                        <div className="font-bold text-slate-900">
+                          {new Date(rcv.tanggal_terima).toLocaleDateString('id-ID')}
+                        </div>
+                        {rcv.tanggal_po && (
+                          <div className="text-[10px] text-brand-700 font-medium">
+                            PO: {new Date(rcv.tanggal_po).toLocaleDateString('id-ID')}
+                          </div>
+                        )}
                       </td>
                       <td className="py-3.5 px-4 text-slate-800 font-semibold text-xs">
                         {rcv.pabrik_nama || rcv.po?.pabrik?.nama || 'UMKM Comet'}

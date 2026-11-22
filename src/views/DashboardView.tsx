@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Package,
   TrendingUp,
@@ -11,9 +11,12 @@ import {
   Calendar,
   AlertTriangle,
   CheckCircle,
+  Filter,
+  History,
+  Info,
 } from 'lucide-react';
 import { api } from '../services/api';
-import { StokKelompok, Ukuran, Pengembalian } from '../types';
+import { StokKelompok, Ukuran, Pengembalian, Penerimaan, Pengeluaran } from '../types';
 import { CetakLabelModal } from '../components/CetakLabelModal';
 import { LabelData } from '../utils/labelGenerator';
 
@@ -25,6 +28,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   const [stokKelompok, setStokKelompok] = useState<StokKelompok[]>([]);
   const [ukurans, setUkurans] = useState<Ukuran[]>([]);
   const [returs, setReturs] = useState<Pengembalian[]>([]);
+  const [penerimaans, setPenerimaans] = useState<Penerimaan[]>([]);
+  const [pengeluarans, setPengeluarans] = useState<Pengeluaran[]>([]);
+  const [selectedDate, setSelectedDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [viewMode, setViewMode] = useState<'harian' | 'buku_besar'>('harian');
+  const [selectedUkuranFilter, setSelectedUkuranFilter] = useState<string>('all');
   const [searchBarcode, setSearchBarcode] = useState('');
   const [barcodeDetail, setBarcodeDetail] = useState<any | null>(null);
   const [isSearching, setIsSearching] = useState(false);
@@ -34,14 +42,18 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   const loadData = async () => {
     try {
       setLoading(true);
-      const [stokData, ukuranData, returData] = await Promise.all([
+      const [stokData, ukuranData, returData, rcvData, pengData] = await Promise.all([
         api.getStokKelompok(),
         api.getUkuranList(),
         api.getPengembalianList(),
+        api.getPenerimaanList(),
+        api.getPengeluaranList(),
       ]);
       setStokKelompok(stokData);
       setUkurans(ukuranData);
       setReturs(returData);
+      setPenerimaans(rcvData);
+      setPengeluarans(pengData);
     } catch (err) {
       console.error('Error loading dashboard data:', err);
     } finally {
@@ -77,6 +89,184 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
     }
   };
 
+  // --------------------------------------------------------------------------
+  // BUKU MUTASI STOK KASUR (LEDGER PER UKURAN & PER TANGGAL)
+  // Logika: Saldo Awal (hari ini) = Sisa Saldo (kemarin)
+  // Sisa Saldo (hari ini) = Saldo Awal + Debit (PO Masuk) - Kredit (Keluar)
+  // --------------------------------------------------------------------------
+  const { ledgerPerUkuran, debitMap, kreditMap } = useMemo(() => {
+    const dMap: Record<string, Record<string, number>> = {};
+    const kMap: Record<string, Record<string, number>> = {};
+    const dateSet = new Set<string>();
+    dateSet.add(new Date().toISOString().slice(0, 10)); // Selalu sertakan hari ini
+    if (selectedDate) dateSet.add(selectedDate);
+
+    // 1. Debit dari Penerimaan (PO Kasur Masuk)
+    penerimaans.forEach((rcv) => {
+      const tgl = rcv.tanggal_terima;
+      if (!tgl) return;
+      dateSet.add(tgl);
+
+      if (rcv.barcodes && rcv.barcodes.length > 0) {
+        rcv.barcodes.forEach((b) => {
+          const kode = (b.kode_ukuran || '').toUpperCase();
+          if (!dMap[kode]) dMap[kode] = {};
+          dMap[kode][tgl] = (dMap[kode][tgl] || 0) + (Number(b.qty) || 0);
+        });
+      } else if (rcv.po && rcv.po.items) {
+        rcv.po.items.forEach((it) => {
+          const u = ukurans.find((uk) => uk.id === it.ukuran_id);
+          const kode = (u?.kode || '').toUpperCase();
+          if (!dMap[kode]) dMap[kode] = {};
+          dMap[kode][tgl] = (dMap[kode][tgl] || 0) + (Number(it.qty_diterima || it.qty_pesan) || 0);
+        });
+      }
+    });
+
+    // 2. Debit dari stokKelompok (cadangan jika ada kelompok tanpa record rcv terpisah)
+    stokKelompok.forEach((k) => {
+      const tgl = k.tanggal_masuk;
+      if (tgl) dateSet.add(tgl);
+      const kode = (k.kode_ukuran || k.barcode.split('-')[0] || '').toUpperCase();
+      if (!dMap[kode]) dMap[kode] = {};
+      if (!dMap[kode][tgl]) {
+        dMap[kode][tgl] = k.jumlah_masuk;
+      }
+    });
+
+    // 3. Kredit dari Pengeluaran (Surat Jalan / Scan Keluar)
+    pengeluarans.forEach((peng) => {
+      const tgl = peng.tanggal;
+      if (!tgl) return;
+      dateSet.add(tgl);
+
+      (peng.items || []).forEach((it) => {
+        if (it.is_batal) return;
+        const kode = (it.barcode_scan ? it.barcode_scan.split('-')[0] : (it.barang?.ukuran?.kode || '')).toUpperCase();
+        if (!kode) return;
+        if (!kMap[kode]) kMap[kode] = {};
+        kMap[kode][tgl] = (kMap[kode][tgl] || 0) + 1;
+      });
+    });
+
+    // 4. Retur Kembali ke Stok (menambah kembali ke debit gudang)
+    returs.forEach((ret) => {
+      const tgl = ret.tanggal;
+      if (!tgl) return;
+      dateSet.add(tgl);
+
+      (ret.items || []).forEach((it) => {
+        const kode = (it.kode_ukuran || (it.barcode ? it.barcode.split('-')[0] : '')).toUpperCase();
+        if (!kode) return;
+        if (!dMap[kode]) dMap[kode] = {};
+        dMap[kode][tgl] = (dMap[kode][tgl] || 0) + (Number(it.qty) || 0);
+      });
+    });
+
+    // Bangun ledger kronologis per ukuran
+    const sortedDatesAsc = Array.from(dateSet).sort();
+    const ledgerMap: Record<string, {
+      tanggal: string;
+      kode_ukuran: string;
+      nama_ukuran: string;
+      saldo: number;
+      debit: number;
+      kredit: number;
+      sisa_saldo: number;
+    }[]> = {};
+
+    ukurans.forEach((u) => {
+      const kode = u.kode.toUpperCase();
+      let currentBalance = 0;
+      const rows: {
+        tanggal: string;
+        kode_ukuran: string;
+        nama_ukuran: string;
+        saldo: number;
+        debit: number;
+        kredit: number;
+        sisa_saldo: number;
+      }[] = [];
+
+      sortedDatesAsc.forEach((d) => {
+        const debitHariIni = dMap[kode]?.[d] || 0;
+        const kreditHariIni = kMap[kode]?.[d] || 0;
+        const saldoAwal = currentBalance;
+        const sisa = saldoAwal + debitHariIni - kreditHariIni;
+
+        rows.push({
+          tanggal: d,
+          kode_ukuran: u.kode,
+          nama_ukuran: u.nama,
+          saldo: saldoAwal,
+          debit: debitHariIni,
+          kredit: kreditHariIni,
+          sisa_saldo: sisa,
+        });
+
+        // Sisa saldo hari ini menjadi saldo awal esok hari!
+        currentBalance = sisa;
+      });
+
+      ledgerMap[kode] = rows;
+    });
+
+    return { ledgerPerUkuran: ledgerMap, debitMap: dMap, kreditMap: kMap };
+  }, [penerimaans, pengeluarans, returs, stokKelompok, ukurans, selectedDate]);
+
+  // Baris yang ditampilkan di tabel
+  const rowsToDisplay = useMemo(() => {
+    const targetUkurans = selectedUkuranFilter === 'all'
+      ? ukurans
+      : ukurans.filter(u => u.kode.toUpperCase() === selectedUkuranFilter.toUpperCase());
+
+    if (viewMode === 'harian') {
+      return targetUkurans.map((u) => {
+        const kode = u.kode.toUpperCase();
+        const rows = ledgerPerUkuran[kode] || [];
+        const exactMatch = rows.find(r => r.tanggal === selectedDate);
+        if (exactMatch) return exactMatch;
+
+        // Jika tanggal belum tercatat spesifik, cari sisa saldo penutupan sebelum tanggal ini
+        const priorRows = rows.filter(r => r.tanggal < selectedDate);
+        const lastBalance = priorRows.length > 0 ? priorRows[priorRows.length - 1].sisa_saldo : 0;
+        const debitToday = debitMap[kode]?.[selectedDate] || 0;
+        const kreditToday = kreditMap[kode]?.[selectedDate] || 0;
+        const sisaToday = lastBalance + debitToday - kreditToday;
+
+        return {
+          tanggal: selectedDate,
+          kode_ukuran: u.kode,
+          nama_ukuran: u.nama,
+          saldo: lastBalance,
+          debit: debitToday,
+          kredit: kreditToday,
+          sisa_saldo: sisaToday,
+        };
+      });
+    } else {
+      // viewMode === 'buku_besar': tampilkan riwayat kronologis seluruh tanggal
+      const allRows: {
+        tanggal: string;
+        kode_ukuran: string;
+        nama_ukuran: string;
+        saldo: number;
+        debit: number;
+        kredit: number;
+        sisa_saldo: number;
+      }[] = [];
+
+      targetUkurans.forEach((u) => {
+        const kode = u.kode.toUpperCase();
+        const rows = ledgerPerUkuran[kode] || [];
+        allRows.push(...rows);
+      });
+
+      // Urutkan tanggal terbaru di atas
+      return allRows.sort((a, b) => b.tanggal.localeCompare(a.tanggal) || a.kode_ukuran.localeCompare(b.kode_ukuran));
+    }
+  }, [viewMode, selectedDate, selectedUkuranFilter, ukurans, ledgerPerUkuran, debitMap, kreditMap]);
+
   return (
     <div className="space-y-6">
       {/* Welcome Banner */}
@@ -108,7 +298,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
             className="flex-1 md:flex-initial flex items-center justify-center gap-2 px-4 py-3 rounded-2xl bg-brand-700/80 hover:bg-brand-700 border border-brand-400/30 text-white font-semibold text-xs transition"
           >
             <Package className="w-4 h-4" />
-            <span>Catat Barang Datang</span>
+            <span>Purchase Order (PO)</span>
           </button>
           <button
             onClick={() => onNavigate('retur')}
@@ -345,63 +535,199 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
         )}
       </div>
 
-      {/* Tabel Ringkasan Stok per Ukuran */}
-      <div className="bg-white rounded-3xl border border-slate-200/80 p-6 shadow-xs">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
+      {/* Tabel Ringkasan Buku Mutasi Stok & Saldo Kasur */}
+      <div className="bg-white rounded-3xl border border-slate-200/80 p-6 shadow-xs space-y-4">
+        {/* Header Bagian */}
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div>
-            <h2 className="text-lg font-bold text-slate-800">Ringkasan Stok per Ukuran</h2>
-            <p className="text-xs text-slate-500">
-              Total kasur siap kirim di gudang berdasarkan tipe ukuran (80, 90, 100, 120, 140, 160, 200, dan kustom)
+            <div className="flex items-center gap-2">
+              <span className="p-1.5 rounded-lg bg-brand-50 text-brand-700">
+                <Boxes className="w-4 h-4" />
+              </span>
+              <h2 className="text-lg font-bold text-slate-800">Buku Mutasi Stok & Saldo Kasur</h2>
+            </div>
+            <p className="text-xs text-slate-500 mt-1">
+              Pantau arus mutasi kasur busa per ukuran: Saldo Awal + Debit (PO Masuk) - Kredit (Keluar) = Sisa Saldo.
             </p>
           </div>
-          <button
-            onClick={() => onNavigate('laporan')}
-            className="flex items-center gap-1 text-xs font-semibold text-brand-600 hover:text-brand-700 hover:underline"
-          >
-            <span>Buka Laporan Lengkap</span>
-            <ArrowRight className="w-3.5 h-3.5" />
-          </button>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Mode Switcher */}
+            <div className="flex p-1 bg-slate-100 rounded-xl">
+              <button
+                type="button"
+                onClick={() => setViewMode('harian')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+                  viewMode === 'harian'
+                    ? 'bg-white text-brand-700 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Calendar className="w-3.5 h-3.5" />
+                <span>Mutasi Tanggal</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode('buku_besar')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+                  viewMode === 'buku_besar'
+                    ? 'bg-white text-brand-700 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <History className="w-3.5 h-3.5" />
+                <span>Riwayat Buku Besar</span>
+              </button>
+            </div>
+
+            <button
+              onClick={() => onNavigate('laporan')}
+              className="flex items-center gap-1 text-xs font-semibold text-brand-600 hover:text-brand-700 hover:underline px-2 py-1"
+            >
+              <span>Laporan Lengkap</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
         </div>
 
+        {/* Filter Bar: Tanggal & Ukuran */}
+        <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 bg-slate-50/80 rounded-2xl border border-slate-200/70">
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Filter Tanggal (Mode Harian) */}
+            {viewMode === 'harian' && (
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-slate-600 flex items-center gap-1">
+                  <Calendar className="w-3.5 h-3.5 text-slate-400" />
+                  Tanggal:
+                </span>
+                <input
+                  type="date"
+                  value={selectedDate}
+                  onChange={(e) => setSelectedDate(e.target.value)}
+                  className="px-2.5 py-1 text-xs font-mono font-bold bg-white border border-slate-200 rounded-lg text-slate-800 focus:outline-none focus:ring-1 focus:ring-brand-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => setSelectedDate(new Date().toISOString().slice(0, 10))}
+                  className="px-2 py-1 text-[11px] font-bold text-brand-700 hover:bg-brand-50 rounded-md transition"
+                >
+                  Hari Ini
+                </button>
+              </div>
+            )}
+
+            {/* Filter Ukuran */}
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-slate-600 flex items-center gap-1">
+                <Filter className="w-3.5 h-3.5 text-slate-400" />
+                Ukuran:
+              </span>
+              <select
+                value={selectedUkuranFilter}
+                onChange={(e) => setSelectedUkuranFilter(e.target.value)}
+                className="px-2.5 py-1 text-xs font-bold bg-white border border-slate-200 rounded-lg text-slate-800 focus:outline-none focus:ring-1 focus:ring-brand-500"
+              >
+                <option value="all">Semua Ukuran Kasur</option>
+                {ukurans.map((u) => (
+                  <option key={u.id} value={u.kode}>
+                    {u.nama} ({u.kode})
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Info Logika Akuntansi Saldo */}
+          <div className="text-[11px] text-slate-500 flex items-center gap-1.5 bg-white px-2.5 py-1 rounded-lg border border-slate-200">
+            <Info className="w-3.5 h-3.5 text-brand-600 shrink-0" />
+            <span>
+              <strong>Logika:</strong> Saldo Kemarin + Debit (PO Masuk) - Kredit (Keluar) = Sisa Saldo
+            </span>
+          </div>
+        </div>
+
+        {/* Tabel Mutasi Stok */}
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
             <thead>
-              <tr className="border-b border-slate-200 text-xs font-bold text-slate-500 uppercase tracking-wider">
-                <th className="py-3 px-4">Kode Ukuran</th>
+              <tr className="border-b border-slate-200 text-xs font-bold text-slate-500 uppercase tracking-wider bg-slate-50/50">
+                <th className="py-3 px-4">Tanggal</th>
                 <th className="py-3 px-4">Nama Ukuran Kasur</th>
-                <th className="py-3 px-4">Dimensi (P×L×T)</th>
-                <th className="py-3 px-4 text-center">Di Gudang</th>
-                <th className="py-3 px-4 text-center">Keluar</th>
-                <th className="py-3 px-4 text-center">Total Diterima</th>
+                <th className="py-3 px-4 text-center">Saldo</th>
+                <th className="py-3 px-4 text-center">Debit</th>
+                <th className="py-3 px-4 text-center">Kredit</th>
+                <th className="py-3 px-4 text-center">Sisa Saldo</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {ukurans.map((u) => {
-                const stokForUkuran = stokKelompok.filter(s => s.ukuran_id === u.id || s.barcode?.startsWith(`${u.kode}-`));
-                const sisa = stokForUkuran.reduce((sum, s) => sum + s.sisa_di_gudang, 0);
-                const keluar = stokForUkuran.reduce((sum, s) => sum + s.jumlah_keluar, 0);
-                const total = stokForUkuran.reduce((sum, s) => sum + s.jumlah_masuk, 0);
-
-                return (
-                  <tr key={u.id} className="hover:bg-slate-50/80 transition">
-                    <td className="py-3.5 px-4 font-mono font-bold text-brand-700">{u.kode}</td>
-                    <td className="py-3.5 px-4 font-medium text-slate-900">{u.nama}</td>
-                    <td className="py-3.5 px-4 text-xs text-slate-500">
-                      {u.panjang_cm} × {u.lebar_cm} {u.tebal_cm ? `× ${u.tebal_cm}` : ''} cm
+              {rowsToDisplay.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="py-8 text-center text-slate-400 text-xs italic">
+                    Belum ada data mutasi kasur.
+                  </td>
+                </tr>
+              ) : (
+                rowsToDisplay.map((r, idx) => (
+                  <tr key={`${r.kode_ukuran}-${r.tanggal}-${idx}`} className="hover:bg-slate-50/80 transition">
+                    <td className="py-3.5 px-4 font-mono font-bold text-slate-700 text-xs">
+                      {new Date(r.tanggal).toLocaleDateString('id-ID')}
                     </td>
-                    <td className="py-3.5 px-4 text-center">
-                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold font-mono ${
-                        sisa > 0 ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-500'
-                      }`}>
-                        {sisa} pcs
+                    <td className="py-3.5 px-4">
+                      <div className="font-bold text-slate-900">{r.nama_ukuran}</div>
+                      <span className="font-mono text-[11px] text-brand-600 font-semibold">Ukuran {r.kode_ukuran}</span>
+                    </td>
+                    <td className="py-3.5 px-4 text-center font-mono font-bold text-slate-700">
+                      <span className="inline-block px-2.5 py-0.5 rounded-full text-xs bg-slate-100 text-slate-800">
+                        {r.saldo} pcs
                       </span>
                     </td>
-                    <td className="py-3.5 px-4 text-center font-mono text-slate-600 text-xs">{keluar} pcs</td>
-                    <td className="py-3.5 px-4 text-center font-mono text-slate-500 text-xs">{total} pcs</td>
+                    <td className="py-3.5 px-4 text-center font-mono font-bold">
+                      <span className={`inline-block px-2.5 py-0.5 rounded-full text-xs ${
+                        r.debit > 0 ? 'bg-emerald-100 text-emerald-800' : 'text-slate-400'
+                      }`}>
+                        {r.debit > 0 ? `+${r.debit} pcs` : '0 pcs'}
+                      </span>
+                    </td>
+                    <td className="py-3.5 px-4 text-center font-mono font-bold">
+                      <span className={`inline-block px-2.5 py-0.5 rounded-full text-xs ${
+                        r.kredit > 0 ? 'bg-amber-100 text-amber-800' : 'text-slate-400'
+                      }`}>
+                        {r.kredit > 0 ? `-${r.kredit} pcs` : '0 pcs'}
+                      </span>
+                    </td>
+                    <td className="py-3.5 px-4 text-center font-mono font-bold">
+                      <span className={`inline-block px-3 py-1 rounded-full text-xs font-extrabold ${
+                        r.sisa_saldo > 0 ? 'bg-brand-100 text-brand-900 border border-brand-200' : 'bg-slate-100 text-slate-500'
+                      }`}>
+                        {r.sisa_saldo} pcs
+                      </span>
+                    </td>
                   </tr>
-                );
-              })}
+                ))
+              )}
             </tbody>
+            {/* Total Footer */}
+            {rowsToDisplay.length > 0 && (
+              <tfoot className="border-t-2 border-slate-200 bg-slate-50/75 font-bold text-xs text-slate-700">
+                <tr>
+                  <td colSpan={2} className="py-3 px-4 uppercase tracking-wider text-slate-600">
+                    Total
+                  </td>
+                  <td className="py-3 px-4 text-center font-mono text-slate-800">
+                    {rowsToDisplay.reduce((s, r) => s + r.saldo, 0)} pcs
+                  </td>
+                  <td className="py-3 px-4 text-center font-mono text-emerald-700">
+                    +{rowsToDisplay.reduce((s, r) => s + r.debit, 0)} pcs
+                  </td>
+                  <td className="py-3 px-4 text-center font-mono text-amber-700">
+                    -{rowsToDisplay.reduce((s, r) => s + r.kredit, 0)} pcs
+                  </td>
+                  <td className="py-3 px-4 text-center font-mono text-brand-800 text-sm">
+                    {rowsToDisplay.reduce((s, r) => s + r.sisa_saldo, 0)} pcs
+                  </td>
+                </tr>
+              </tfoot>
+            )}
           </table>
         </div>
       </div>
@@ -412,7 +738,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
           <div>
             <h2 className="text-lg font-bold text-slate-800">Kelompok Barcode di Gudang</h2>
             <p className="text-xs text-slate-500">
-              Format barcode: <code className="font-mono text-brand-600">{'{UKURAN}-{DDMMYY}'}</code>
+              Format barcode: <code className="font-mono text-brand-600">{'{UKURAN}-{DDMMYY Tanggal PO}'}</code>
             </p>
           </div>
         </div>
