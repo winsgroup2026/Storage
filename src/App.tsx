@@ -93,7 +93,7 @@ export function App() {
 
   const navItems = [
     { id: 'dashboard', label: 'Dashboard Stok', icon: LayoutDashboard },
-    { id: 'penerimaan', label: 'Catat Barang Datang', icon: Package },
+    { id: 'penerimaan', label: 'Purchase Order (PO)', icon: Package },
     { id: 'scan_keluar', label: 'Scan Barang Keluar', icon: ScanLine, highlight: true },
     { id: 'retur', label: 'Pengembalian (Retur)', icon: RotateCcw },
     { id: 'laporan', label: 'Laporan & Rekap', icon: FileSpreadsheet },
@@ -551,7 +551,7 @@ export function App() {
           }`}
         >
           <Package className="w-4 h-4" />
-          <span className="mt-0.5">Datang</span>
+          <span className="mt-0.5">PO Kasur</span>
         </button>
 
         <button
