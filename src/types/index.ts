@@ -108,6 +108,7 @@ export interface PurchaseOrder {
 export interface Penerimaan {
   id: string;
   po_id?: string;
+  tanggal_po?: string;
   tanggal_terima: string;
   penerima: string;
   pabrik_nama?: string;
@@ -115,7 +116,7 @@ export interface Penerimaan {
   created_at?: string;
   po?: PurchaseOrder;
   total_pcs?: number;
-  barcodes?: { barcode: string; kode_ukuran: string; qty: number }[];
+  barcodes?: { barcode: string; kode_ukuran: string; qty: number; nama_ukuran?: string }[];
 }
 
 export type BarangStatus = 'di_gudang' | 'keluar' | 'rusak';
