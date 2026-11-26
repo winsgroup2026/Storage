@@ -17,6 +17,7 @@ import {
   PayrollRecord,
   UserAccount,
   OFFICIAL_ACCOUNTS,
+  getHppKasur,
 } from '../types';
 
 // ============================================================================
@@ -30,6 +31,7 @@ const SEED_UKURAN: Ukuran[] = [
   { id: 'u-120', kode: '120', nama: 'Kasur Busa Ukuran 120 Super Single (120×200 cm)', panjang_cm: 200, lebar_cm: 120, tebal_cm: 15, aktif: true },
   { id: 'u-140', kode: '140', nama: 'Kasur Busa Ukuran 140 Double (140×200 cm)', panjang_cm: 200, lebar_cm: 140, tebal_cm: 20, aktif: true },
   { id: 'u-160', kode: '160', nama: 'Kasur Busa Ukuran 160 Queen (160×200 cm)', panjang_cm: 200, lebar_cm: 160, tebal_cm: 20, aktif: true },
+  { id: 'u-180', kode: '180', nama: 'Kasur Busa Ukuran 180 (180×200 cm)', panjang_cm: 200, lebar_cm: 180, tebal_cm: 20, aktif: true },
   { id: 'u-200', kode: '200', nama: 'Kasur Busa Ukuran 200 King (200×200 cm)', panjang_cm: 200, lebar_cm: 200, tebal_cm: 20, aktif: true },
 ];
 
@@ -464,17 +466,22 @@ export const api = {
       ukuran_id?: string;
       kode_ukuran: string;
       nama_ukuran?: string;
+      tipe?: string;
       panjang_cm?: number;
       lebar_cm?: number;
       tebal_cm?: number;
       qty: number;
+      harga_satuan?: number;
     }[],
     pabrikNama: string = 'UMKM Comet',
     tanggalPo?: string
   ): Promise<{
     penerimaan_id: string;
+    no_po?: string;
     total_pcs: number;
-    barcodes: { barcode: string; kode_ukuran: string; qty: number; nama_ukuran?: string }[];
+    total_nominal?: number;
+    barcodes: { barcode: string; kode_ukuran: string; qty: number; nama_ukuran?: string; tipe?: string; harga_satuan?: number; subtotal?: number }[];
+    penerimaan?: Penerimaan;
   }> {
     // Format DDMMYY untuk tanggal PO pembentuk barcode (mis. 2026-10-10 -> 101026)
     const tglForBarcode = tanggalPo || tanggalTerima;
@@ -501,7 +508,8 @@ export const api = {
 
     const penerimaanId = `rcv-${Date.now()}`;
     let totalPcs = 0;
-    const barcodesCreated: { barcode: string; kode_ukuran: string; qty: number; nama_ukuran?: string }[] = [];
+    let totalNominal = 0;
+    const barcodesCreated: { barcode: string; kode_ukuran: string; qty: number; nama_ukuran?: string; tipe?: string; harga_satuan?: number; subtotal?: number }[] = [];
 
     for (const it of itemsReceived) {
       if (it.qty <= 0) continue;
@@ -536,11 +544,18 @@ export const api = {
         setLocalData(STORAGE_KEYS.UKURAN, allUkurans);
       }
 
+      const hargaSatuan = it.harga_satuan !== undefined && it.harga_satuan > 0 ? it.harga_satuan : getHppKasur(it.kode_ukuran);
+      const subtotal = hargaSatuan * it.qty;
+      totalNominal += subtotal;
+
       barcodesCreated.push({
         barcode,
         kode_ukuran: it.kode_ukuran,
         nama_ukuran: u.nama,
+        tipe: it.tipe || 'Topper Ryo',
         qty: it.qty,
+        harga_satuan: hargaSatuan,
+        subtotal: subtotal,
       });
 
       // Update PO item qty_diterima jika ada PO terkait
@@ -573,19 +588,32 @@ export const api = {
       setLocalData(STORAGE_KEYS.PO, pos);
     }
 
+    const datePoFormatted = (tanggalPo || tanggalTerima).replace(/-/g, '').slice(2);
+    const poNumber = po?.no_po || `PO-${datePoFormatted}-${String(penerimaanList.length + 1).padStart(4, '0')}`;
+
     // Simpan penerimaan
-    penerimaanList.unshift({
+    const createdPenerimaan: Penerimaan = {
       id: penerimaanId,
       po_id: po?.id,
+      no_po: poNumber,
       tanggal_po: tanggalPo || tanggalTerima,
       tanggal_terima: tanggalTerima,
       penerima,
       pabrik_nama: pabrikNama || po?.pabrik?.nama || 'UMKM Comet',
+      pabrik_alamat: 'Ngablak RT 03/05, Ds. Jetis, Kec. Delanggu, Klaten',
+      pabrik_telepon: '085643218564 / 081332790030',
+      tipe_kasur: 'Topper Ryo / Kasur Busa',
+      pembayaran: 'Transfer Bank (TF)',
+      kepada_yth: "Pak WIWIN (Win's Group)",
+      kepada_alamat: 'Yogyakarta',
       catatan,
       created_at: new Date().toISOString(),
       total_pcs: totalPcs,
+      total_nominal: totalNominal,
       barcodes: barcodesCreated,
-    });
+    };
+
+    penerimaanList.unshift(createdPenerimaan);
 
     setLocalData(STORAGE_KEYS.PENERIMAAN, penerimaanList);
     setLocalData(STORAGE_KEYS.BARANG, barangs);
@@ -600,27 +628,81 @@ export const api = {
 
     return {
       penerimaan_id: penerimaanId,
+      no_po: poNumber,
       total_pcs: totalPcs,
+      total_nominal: totalNominal,
       barcodes: barcodesCreated,
+      penerimaan: createdPenerimaan,
     };
   },
 
   async getPenerimaanList(): Promise<Penerimaan[]> {
     const pos = await this.getPurchaseOrders();
+    const localList = getLocalData<Penerimaan[]>(STORAGE_KEYS.PENERIMAAN, SEED_PENERIMAAN).map(rcv => ({
+      ...rcv,
+      po: pos.find(p => p.id === rcv.po_id),
+    }));
 
     if (isSupabaseConfigured && supabase) {
       const { data, error } = await supabase
         .from('penerimaan')
         .select(`*, po:purchase_order(*, pabrik:pabrik(*))`)
         .order('created_at', { ascending: false });
-      if (!error && data) return data;
+      if (!error && data) {
+        const missingIds = data.filter((r: any) => !r.barcodes || r.barcodes.length === 0).map((r: any) => r.id);
+        let barangByRcv: Record<string, any[]> = {};
+        if (missingIds.length > 0) {
+          const { data: barangRows } = await supabase
+            .from('barang')
+            .select('penerimaan_id, barcode, ukuran:ukuran(kode, nama)')
+            .in('penerimaan_id', missingIds);
+          if (barangRows) {
+            for (const b of barangRows as any[]) {
+              if (!barangByRcv[b.penerimaan_id]) barangByRcv[b.penerimaan_id] = [];
+              barangByRcv[b.penerimaan_id].push(b);
+            }
+          }
+        }
+
+        const enrichedRemote: Penerimaan[] = data.map((r: any) => {
+          if (r.barcodes && r.barcodes.length > 0) return r;
+          const bRows = barangByRcv[r.id] || [];
+          const grouped: Record<string, { barcode: string; kode_ukuran: string; nama_ukuran?: string; tipe?: string; qty: number; harga_satuan?: number; subtotal?: number }> = {};
+          for (const b of bRows) {
+            const kode = b.ukuran?.kode || String(b.barcode || '').split('-')[0] || '';
+            if (!grouped[b.barcode]) {
+              const hpp = getHppKasur(kode);
+              grouped[b.barcode] = {
+                barcode: b.barcode,
+                kode_ukuran: kode,
+                nama_ukuran: b.ukuran?.nama || `Kasur Ukuran ${kode}`,
+                tipe: 'Topper Ryo',
+                qty: 0,
+                harga_satuan: hpp,
+                subtotal: 0,
+              };
+            }
+            grouped[b.barcode].qty += 1;
+            grouped[b.barcode].subtotal = (grouped[b.barcode].harga_satuan || 0) * grouped[b.barcode].qty;
+          }
+          const barcodes = Object.values(grouped);
+          const totalPcs = r.total_pcs || barcodes.reduce((s, it) => s + it.qty, 0);
+          const totalNominal = r.total_nominal || barcodes.reduce((s, it) => s + (it.subtotal || 0), 0);
+          return {
+            ...r,
+            total_pcs: totalPcs,
+            total_nominal: totalNominal,
+            barcodes,
+          };
+        });
+
+        const remoteIds = new Set(enrichedRemote.map(r => r.id));
+        const localOnly = localList.filter(l => !remoteIds.has(l.id));
+        return [...localOnly, ...enrichedRemote];
+      }
     }
 
-    const list = getLocalData<Penerimaan[]>(STORAGE_KEYS.PENERIMAAN, SEED_PENERIMAAN);
-    return list.map(rcv => ({
-      ...rcv,
-      po: pos.find(p => p.id === rcv.po_id),
-    }));
+    return localList;
   },
 
   // --------------------------------------------------------------------------
@@ -744,17 +826,23 @@ export const api = {
         : { barcode: s.barcode, pembeli_nama: s.pembeli_nama || data.pembeli_nama }
     );
 
+    const distinctItemBuyers = Array.from(
+      new Set(scanEntries.map(s => s.pembeli_nama?.trim()).filter((b): b is string => Boolean(b && b !== '-')))
+    );
+    const finalPembeliNama =
+      data.pembeli_nama?.trim() || (distinctItemBuyers.length > 0 ? distinctItemBuyers.join(', ') : '-');
+
     if (isSupabaseConfigured && supabase) {
       const { data: res, error } = await supabase.rpc('simpan_pengeluaran', {
         p_pengirim_id: data.pengirim_id || null,
         p_koordinator_id: data.koordinator_id || null,
         p_koordinator_nama: data.koordinator_nama || null,
         p_pembeli_id: data.pembeli_id || null,
-        p_pembeli_nama: data.pembeli_nama,
+        p_pembeli_nama: finalPembeliNama,
         p_keterangan: data.keterangan || '',
         p_barcodes: scanEntries.map(e => e.barcode),
         p_dibuat_oleh: data.dibuat_oleh || 'Admin',
-        p_buyer_names: scanEntries.map(e => e.pembeli_nama || data.pembeli_nama),
+        p_buyer_names: scanEntries.map(e => e.pembeli_nama || ''),
       });
       if (error) throw error;
       const pengeluaran = await this.getPengeluaranById(res.pengeluaran_id);
@@ -790,7 +878,7 @@ export const api = {
         pengeluaran_id: '',
         barang_id: selected.id,
         barcode_scan: barcode,
-        pembeli_nama: entry.pembeli_nama || data.pembeli_nama,
+        pembeli_nama: entry.pembeli_nama || '',
         waktu_scan: new Date().toISOString(),
         is_batal: false,
         barang: selected,
@@ -811,8 +899,6 @@ export const api = {
     const allPihak = getLocalData<Pihak[]>(STORAGE_KEYS.PIHAK, SEED_PIHAK);
 
     const finalKoordNama = data.koordinator_nama || (allPihak.find(p => p.id === data.koordinator_id)?.nama) || '';
-    const distinctItemBuyers = Array.from(new Set(scanEntries.map(s => s.pembeli_nama?.trim()).filter(Boolean)));
-    const finalPembeliNama = data.pembeli_nama?.trim() || (distinctItemBuyers.length > 0 ? distinctItemBuyers.join(', ') : 'Banyak Pembeli');
 
     const newPengeluaran: Pengeluaran = {
       id: pengeluaranId,
@@ -843,7 +929,7 @@ export const api = {
 
     addLocalAudit('SIMPAN_PENGELUARAN', 'pengeluaran', pengeluaranId, {
       no_surat_jalan: noSj,
-      pembeli_nama: data.pembeli_nama,
+      pembeli_nama: finalPembeliNama,
       total_pcs: data.scans.length,
       dibuat_oleh: data.dibuat_oleh || 'Admin',
     });
