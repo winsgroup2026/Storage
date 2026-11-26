@@ -108,15 +108,31 @@ export interface PurchaseOrder {
 export interface Penerimaan {
   id: string;
   po_id?: string;
+  no_po?: string;
   tanggal_po?: string;
   tanggal_terima: string;
   penerima: string;
   pabrik_nama?: string;
+  pabrik_alamat?: string;
+  pabrik_telepon?: string;
+  tipe_kasur?: string;
+  pembayaran?: string;
+  kepada_yth?: string;
+  kepada_alamat?: string;
   catatan?: string;
   created_at?: string;
   po?: PurchaseOrder;
   total_pcs?: number;
-  barcodes?: { barcode: string; kode_ukuran: string; qty: number; nama_ukuran?: string }[];
+  total_nominal?: number;
+  barcodes?: {
+    barcode: string;
+    kode_ukuran: string;
+    qty: number;
+    nama_ukuran?: string;
+    tipe?: string;
+    harga_satuan?: number;
+    subtotal?: number;
+  }[];
 }
 
 export type BarangStatus = 'di_gudang' | 'keluar' | 'rusak';
@@ -229,15 +245,44 @@ export interface ScanItemSummary {
   tanggal_masuk: string;
 }
 
-// Preset Ukuran Standar Kasur Sesuai Permintaan User: 80, 90, 100, 120, 140, 160, 200
+// Master Daftar Harga Kasur Busa (HPP) Sesuai Standar Resmi Pabrik Win's Group
+export const MASTER_HPP_KASUR: Record<string, number> = {
+  '80': 225000,
+  '90': 244000,
+  '100': 271700,
+  '120': 307800,
+  '140': 359500,
+  '160': 395500,
+  '180': 446800,
+  '200': 515820,
+};
+
+export function getHppKasur(kodeUkuran: string): number {
+  if (!kodeUkuran) return 0;
+  const clean = kodeUkuran.trim().toUpperCase();
+  if (MASTER_HPP_KASUR[clean] !== undefined) {
+    return MASTER_HPP_KASUR[clean];
+  }
+  // Cek jika formatnya "200x80" atau "80x200"
+  const digits = clean.match(/(\d+)/g);
+  if (digits) {
+    for (const d of digits) {
+      if (MASTER_HPP_KASUR[d] !== undefined) return MASTER_HPP_KASUR[d];
+    }
+  }
+  return 0;
+}
+
+// Preset Ukuran Standar Kasur Sesuai Permintaan User: 80, 90, 100, 120, 140, 160, 180, 200
 export const UKURAN_STANDAR_KASUR = [
-  { kode: '80', nama: 'Kasur Busa No. 6 (80×200 cm)', panjang_cm: 200, lebar_cm: 80, tebal_cm: 15 },
-  { kode: '90', nama: 'Kasur Busa No. 5 Single (90×200 cm)', panjang_cm: 200, lebar_cm: 90, tebal_cm: 15 },
-  { kode: '100', nama: 'Kasur Busa No. 4B (100×200 cm)', panjang_cm: 200, lebar_cm: 100, tebal_cm: 15 },
-  { kode: '120', nama: 'Kasur Busa No. 4 Super Single (120×200 cm)', panjang_cm: 200, lebar_cm: 120, tebal_cm: 15 },
-  { kode: '140', nama: 'Kasur Busa No. 3B Double (140×200 cm)', panjang_cm: 200, lebar_cm: 140, tebal_cm: 20 },
-  { kode: '160', nama: 'Kasur Busa No. 3 Queen (160×200 cm)', panjang_cm: 200, lebar_cm: 160, tebal_cm: 20 },
-  { kode: '200', nama: 'Kasur Busa No. 1 King (200×200 cm)', panjang_cm: 200, lebar_cm: 200, tebal_cm: 20 },
+  { kode: '80', nama: 'Kasur Busa No. 6 (80×200 cm)', panjang_cm: 200, lebar_cm: 80, tebal_cm: 15, hpp: 225000 },
+  { kode: '90', nama: 'Kasur Busa No. 5 Single (90×200 cm)', panjang_cm: 200, lebar_cm: 90, tebal_cm: 15, hpp: 244000 },
+  { kode: '100', nama: 'Kasur Busa No. 4B (100×200 cm)', panjang_cm: 200, lebar_cm: 100, tebal_cm: 15, hpp: 271700 },
+  { kode: '120', nama: 'Kasur Busa No. 4 Super Single (120×200 cm)', panjang_cm: 200, lebar_cm: 120, tebal_cm: 15, hpp: 307800 },
+  { kode: '140', nama: 'Kasur Busa No. 3B Double (140×200 cm)', panjang_cm: 200, lebar_cm: 140, tebal_cm: 20, hpp: 359500 },
+  { kode: '160', nama: 'Kasur Busa No. 3 Queen (160×200 cm)', panjang_cm: 200, lebar_cm: 160, tebal_cm: 20, hpp: 395500 },
+  { kode: '180', nama: 'Kasur Busa No. 2 Queen Extra (180×200 cm)', panjang_cm: 200, lebar_cm: 180, tebal_cm: 20, hpp: 446800 },
+  { kode: '200', nama: 'Kasur Busa No. 1 King (200×200 cm)', panjang_cm: 200, lebar_cm: 200, tebal_cm: 20, hpp: 515820 },
 ] as const;
 
 // ----------------------------------------------------------------------------
